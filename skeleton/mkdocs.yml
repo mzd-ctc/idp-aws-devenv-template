@@ -1,0 +1,67 @@
+site_name: AWS Terraform Infrastructure
+site_description: AWS Terraform Infrastructure Documentation
+site_author: MZD Platform Team
+site_url: https://github.com/${{ values.github_owner }}/${{ values.github_repo }}
+
+repo_name: ${{ values.github_owner }}/${{ values.github_repo }}
+repo_url: https://github.com/${{ values.github_owner }}/${{ values.github_repo }}
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.share
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+
+markdown_extensions:
+  - admonition
+  - codehilite
+  - footnotes
+  - meta
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.magiclink
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.tabbed
+  - pymdownx.tasklist
+  - pymdownx.tilde
+  - toc:
+      anchorlink: true
+      permalink: true
+
+plugins:
+  - search
+  - git-revision-date-localized
+
+nav:
+  - Home: index.md
+  - Overview: overview.md
+  - Architecture: architecture.md
+  - Infrastructure:
+    - VPC: infrastructure/vpc.md
+    - EKS: infrastructure/eks.md
+    - RDS: infrastructure/rds.md
+  - Deployment:
+    - Prerequisites: deployment/prerequisites.md
+    - Installation: deployment/installation.md
+    - Configuration: deployment/configuration.md
+  - Operations:
+    - Monitoring: operations/monitoring.md
+    - Troubleshooting: operations/troubleshooting.md
+  - API Reference: api-reference.md

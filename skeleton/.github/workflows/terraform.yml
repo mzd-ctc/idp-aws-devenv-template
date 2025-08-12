@@ -1,0 +1,416 @@
+name: 🏗️ Terraform CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/terraform.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/terraform.yml'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Terraform action to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+
+env:
+  # GitHub Actions Variables 사용
+  AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+  TEAM_NAME: ${{ vars.TEAM_NAME }}
+  ENVIRONMENT_TYPE: ${{ vars.ENVIRONMENT_TYPE }}
+  PROJECT_NAME: ${{ vars.PROJECT_NAME }}
+  VPC_CIDR: ${{ vars.VPC_CIDR }}
+  CREATE_EKS: ${{ vars.CREATE_EKS }}
+  CREATE_RDS: ${{ vars.CREATE_RDS }}
+  
+  # GitHub Actions Secrets 사용
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  
+  # Terraform 설정
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+
+jobs:
+  # 🔍 Secrets 확인
+  check-secrets:
+    name: 🔍 Check Secrets
+    runs-on: ubuntu-latest
+    outputs:
+      secrets-configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: Check if AWS secrets are configured
+        id: check
+        run: |
+          if [[ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" && -n "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]]; then
+            echo "configured=true" >> $GITHUB_OUTPUT
+            echo "✅ AWS Secrets are configured"
+          else
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "⚠️  AWS Secrets are not configured"
+            echo "Please configure the following secrets in your repository:"
+            echo "  - AWS_ACCESS_KEY_ID"
+            echo "  - AWS_SECRET_ACCESS_KEY"
+            echo ""
+            echo "Go to: Settings > Secrets and variables > Actions"
+          fi
+
+  # 🔐 보안 검사
+  security-scan:
+    name: 🔐 Security Scan
+    runs-on: ubuntu-latest
+    needs: [check-secrets]
+    if: needs.check-secrets.outputs.secrets-configured == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Checkov security scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: terraform/
+          quiet: true
+          soft_fail: true
+          framework: terraform
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+
+      - name: Upload Checkov results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov-results.sarif
+
+  # 📋 Terraform Plan
+  terraform-plan:
+    name: 📋 Terraform Plan
+    runs-on: ubuntu-latest
+    needs: [check-secrets, security-scan]
+    if: |
+      needs.check-secrets.outputs.secrets-configured == 'true' &&
+      (
+        github.event_name == 'push' ||
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'plan')
+      )
+    defaults:
+      run:
+        working-directory: terraform
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.5.0'
+
+      - name: 📝 Create terraform.tfvars
+        run: |
+          cat > terraform.auto.tfvars << EOF
+          # Auto-generated from GitHub Actions Variables
+          team_name        = "${{ vars.TEAM_NAME }}"
+          environment_type = "${{ vars.ENVIRONMENT_TYPE }}"
+          project_name     = "${{ vars.PROJECT_NAME }}"
+          aws_region       = "${{ vars.AWS_REGION }}"
+          vpc_cidr         = "${{ vars.VPC_CIDR }}"
+          create_eks       = ${{ vars.CREATE_EKS }}
+          create_rds       = ${{ vars.CREATE_RDS }}
+          
+          # Additional configurations
+          tags = {
+            Environment   = "${{ vars.ENVIRONMENT_TYPE }}"
+            Team         = "${{ vars.TEAM_NAME }}"
+            Project      = "${{ vars.PROJECT_NAME }}"
+            ManagedBy    = "terraform"
+            Source       = "backstage-scaffolder"
+            GitHubRepo   = "${{ github.repository }}"
+            GitHubSHA    = "${{ github.sha }}"
+            DeployedAt   = "${{ github.run_id }}"
+          }
+          EOF
+
+      - name: 🏃 Terraform Init
+        run: terraform init
+        
+      - name: ✅ Terraform Validate
+        run: terraform validate
+
+      - name: 🎨 Terraform Format Check
+        run: terraform fmt -check -diff
+        continue-on-error: true
+
+      - name: 📋 Terraform Plan
+        id: plan
+        run: |
+          terraform plan -detailed-exitcode -out=tfplan
+          
+          # Generate human readable plan
+          terraform show -no-color tfplan > plan-output.txt
+          
+          # Create plan summary
+          echo "## 📋 Terraform Plan Summary" > plan-summary.md
+          echo "" >> plan-summary.md
+          echo "- **Environment**: ${{ vars.ENVIRONMENT_TYPE }}" >> plan-summary.md
+          echo "- **Region**: ${{ vars.AWS_REGION }}" >> plan-summary.md
+          echo "- **Project**: ${{ vars.PROJECT_NAME }}" >> plan-summary.md
+          echo "- **Team**: ${{ vars.TEAM_NAME }}" >> plan-summary.md
+          echo "- **VPC CIDR**: ${{ vars.VPC_CIDR }}" >> plan-summary.md
+          echo "- **Create EKS**: ${{ vars.CREATE_EKS }}" >> plan-summary.md
+          echo "- **Create RDS**: ${{ vars.CREATE_RDS }}" >> plan-summary.md
+          echo "- **Git SHA**: \`${{ github.sha }}\`" >> plan-summary.md
+          echo "" >> plan-summary.md
+          
+          # Count resources
+          PLANNED_RESOURCES=$(terraform show -json tfplan | jq -r '.planned_values.root_module.resources // [] | length')
+          echo "- **Planned Resources**: $PLANNED_RESOURCES" >> plan-summary.md
+          echo "" >> plan-summary.md
+          
+          echo "### 🔄 Changes Detected" >> plan-summary.md
+          echo "" >> plan-summary.md
+          echo "\`\`\`terraform" >> plan-summary.md
+          head -50 plan-output.txt >> plan-summary.md
+          echo "\`\`\`" >> plan-summary.md
+
+      - name: 💾 Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ vars.ENVIRONMENT_TYPE }}
+          path: |
+            terraform/tfplan
+            terraform/plan-output.txt
+            terraform/plan-summary.md
+          retention-days: 30
+
+      - name: 💬 Comment PR
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        with:
+          script: |
+            const fs = require('fs');
+            
+            let planSummary = '';
+            try {
+              planSummary = fs.readFileSync('terraform/plan-summary.md', 'utf8');
+            } catch (error) {
+              planSummary = '❌ Could not read plan summary';
+            }
+            
+            const output = `## 🏗️ Terraform Plan Results
+            
+            ${planSummary}
+            
+            <details><summary>📄 Show Full Plan</summary>
+            
+            \`\`\`terraform
+            ${fs.readFileSync('terraform/plan-output.txt', 'utf8')}
+            \`\`\`
+            
+            </details>
+            
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+  # 🚀 Terraform Apply
+  terraform-apply:
+    name: 🚀 Terraform Apply
+    runs-on: ubuntu-latest
+    needs: [check-secrets, terraform-plan]
+    if: |
+      needs.check-secrets.outputs.secrets-configured == 'true' &&
+      (
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+      )
+    
+    environment: 
+      name: development
+      url: https://console.aws.amazon.com/vpc/home?region=${{ vars.AWS_REGION }}
+    
+    defaults:
+      run:
+        working-directory: terraform
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.5.0'
+
+      - name: 📥 Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan-${{ vars.ENVIRONMENT_TYPE }}
+          path: terraform/
+
+      - name: 📝 Create terraform.tfvars
+        run: |
+          cat > terraform.auto.tfvars << EOF
+          # Auto-generated from GitHub Actions Variables
+          team_name        = "${{ vars.TEAM_NAME }}"
+          environment_type = "${{ vars.ENVIRONMENT_TYPE }}"
+          project_name     = "${{ vars.PROJECT_NAME }}"
+          aws_region       = "${{ vars.AWS_REGION }}"
+          vpc_cidr         = "${{ vars.VPC_CIDR }}"
+          create_eks       = ${{ vars.CREATE_EKS }}
+          create_rds       = ${{ vars.CREATE_RDS }}
+          
+          # Additional configurations
+          tags = {
+            Environment   = "${{ vars.ENVIRONMENT_TYPE }}"
+            Team         = "${{ vars.TEAM_NAME }}"
+            Project      = "${{ vars.PROJECT_NAME }}"
+            ManagedBy    = "terraform"
+            Source       = "backstage-scaffolder"
+            GitHubRepo   = "${{ github.repository }}"
+            GitHubSHA    = "${{ github.sha }}"
+            DeployedAt   = "${{ github.run_id }}"
+          }
+          EOF
+
+      - name: 🏃 Terraform Init
+        run: terraform init
+
+      - name: 🚀 Terraform Apply
+        run: |
+          echo "🚀 Applying Terraform plan..."
+          terraform apply -auto-approve tfplan
+          
+          echo "✅ Apply completed successfully!"
+          
+          # Generate outputs summary
+          echo "## 🎉 Deployment Completed!" > apply-summary.md
+          echo "" >> apply-summary.md
+          echo "- **Environment**: ${{ vars.ENVIRONMENT_TYPE }}" >> apply-summary.md
+          echo "- **Region**: ${{ vars.AWS_REGION }}" >> apply-summary.md
+          echo "- **Deployed At**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> apply-summary.md
+          echo "- **Git SHA**: \`${{ github.sha }}\`" >> apply-summary.md
+          echo "" >> apply-summary.md
+          
+          # Get outputs
+          if terraform output -json > outputs.json 2>/dev/null; then
+            echo "### 📤 Terraform Outputs" >> apply-summary.md
+            echo "" >> apply-summary.md
+            echo "\`\`\`json" >> apply-summary.md
+            cat outputs.json >> apply-summary.md
+            echo "\`\`\`" >> apply-summary.md
+          fi
+
+      - name: 🔔 Notify Success
+        if: success()
+        run: |
+          echo "🎉 Infrastructure deployment completed successfully!"
+          echo "Environment: ${{ vars.ENVIRONMENT_TYPE }}"
+          echo "Region: ${{ vars.AWS_REGION }}"
+          echo "Check the AWS console for deployed resources."
+
+  # 💥 Terraform Destroy
+  terraform-destroy:
+    name: 💥 Terraform Destroy
+    runs-on: ubuntu-latest
+    needs: [check-secrets]
+    if: |
+      needs.check-secrets.outputs.secrets-configured == 'true' &&
+      github.event_name == 'workflow_dispatch' && 
+      github.event.inputs.action == 'destroy'
+    
+    environment:
+      name: development-destroy
+      url: https://console.aws.amazon.com/vpc/home?region=${{ vars.AWS_REGION }}
+    
+    defaults:
+      run:
+        working-directory: terraform
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.5.0'
+
+      - name: ⚠️ Confirm Destroy
+        run: |
+          echo "⚠️  WARNING: This will destroy all infrastructure!"
+          echo "Environment: ${{ vars.ENVIRONMENT_TYPE }}"
+          echo "Region: ${{ vars.AWS_REGION }}"
+          echo "Proceeding with destroy in 10 seconds..."
+          sleep 10
+
+      - name: 📝 Create terraform.tfvars
+        run: |
+          cat > terraform.auto.tfvars << EOF
+          team_name        = "${{ vars.TEAM_NAME }}"
+          environment_type = "${{ vars.ENVIRONMENT_TYPE }}"
+          project_name     = "${{ vars.PROJECT_NAME }}"
+          aws_region       = "${{ vars.AWS_REGION }}"
+          EOF
+
+      - name: 🏃 Terraform Init
+        run: terraform init
+
+      - name: 💥 Terraform Destroy
+        run: |
+          echo "💥 Destroying infrastructure..."
+          terraform destroy -auto-approve
+          echo "✅ Destroy completed!"
+
+      - name: 🔔 Notify Destroy Complete
+        run: |
+          echo "💥 Infrastructure destroyed successfully!"
+          echo "Environment: ${{ vars.ENVIRONMENT_TYPE }}"
+          echo "All AWS resources have been cleaned up."
+
+  # ⚠️ Secrets 설정 안내
+  secrets-notice:
+    name: ⚠️ Secrets Configuration Required
+    runs-on: ubuntu-latest
+    needs: [check-secrets]
+    if: needs.check-secrets.outputs.secrets-configured == 'false'
+    steps:
+      - name: Show Secrets Configuration Guide
+        run: |
+          echo "## ⚠️ AWS Secrets Configuration Required" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "This workflow requires AWS credentials to be configured as GitHub Secrets." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔧 Setup Instructions:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Go to your repository **Settings**" >> $GITHUB_STEP_SUMMARY
+          echo "2. Navigate to **Secrets and variables** → **Actions**" >> $GITHUB_STEP_SUMMARY
+          echo "3. Add the following secrets:" >> $GITHUB_STEP_SUMMARY
+          echo "   - **AWS_ACCESS_KEY_ID**: Your AWS Access Key ID" >> $GITHUB_STEP_SUMMARY
+          echo "   - **AWS_SECRET_ACCESS_KEY**: Your AWS Secret Access Key" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Quick Links:" >> $GITHUB_STEP_SUMMARY
+          echo "- [Repository Settings](https://github.com/${{ github.repository }}/settings/secrets/actions)" >> $GITHUB_STEP_SUMMARY
+          echo "- [AWS IAM Console](https://console.aws.amazon.com/iam/home#/users)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Required IAM Permissions:" >> $GITHUB_STEP_SUMMARY
+          echo "- EC2 (VPC, Security Groups)" >> $GITHUB_STEP_SUMMARY
+          echo "- EKS (if creating Kubernetes clusters)" >> $GITHUB_STEP_SUMMARY
+          echo "- RDS (if creating databases)" >> $GITHUB_STEP_SUMMARY
+          echo "- S3 (for Terraform state)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Once configured, re-run this workflow to proceed with Terraform operations." >> $GITHUB_STEP_SUMMARY 

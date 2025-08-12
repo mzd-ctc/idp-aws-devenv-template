@@ -1,0 +1,480 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: terraform-aws-environment
+  namespace: default
+  title: AWS Terraform 환경 생성
+  description: AWS 클라우드를 위한 팀/환경별 IaC 템플릿 자동화 및 GitHub 저장
+  annotations:
+    github.com/project-slug: mzd-ctc/idp-aws-devenv-template
+    backstage.io/source-location: url:https://github.com/mzd-ctc/idp-aws-devenv-template
+  tags:
+    - terraform
+    - aws
+    - infrastructure
+    - devops
+spec:
+  owner: platform-team
+  type: infrastructure
+  parameters:
+    - title: 🏢 기본 정보
+      required: [team_name, environment_type, project_name]
+      properties:
+        team_name:
+          title: 팀 이름
+          type: string
+          description: 팀 또는 조직 이름 (예 backend-team, frontend-team)
+          pattern: '^[a-z0-9-]+$'
+          ui:help: 소문자, 숫자, 하이픈만 사용 가능
+        environment_type:
+          title: 환경 타입
+          type: string
+          enum: [dev, stg, prod]
+          enumNames: ['개발 (Development)', '스테이징 (Staging)', '운영 (Production)']
+          description: 배포할 환경 타입
+          default: dev
+        project_name:
+          title: 프로젝트명
+          type: string
+          description: 프로젝트 또는 애플리케이션 이름 (예 ecommerce-api, user-portal)
+          pattern: '^[a-z0-9-]+$'
+          ui:help: 소문자, 숫자, 하이픈만 사용 가능
+        aws_region:
+          title: AWS 리전
+          type: string
+          enum: 
+            - ap-northeast-2
+            - ap-northeast-1
+            - us-east-1
+            - us-west-2
+            - eu-west-1
+          enumNames:
+            - '서울 (ap-northeast-2)'
+            - '도쿄 (ap-northeast-1)'
+            - 'N. Virginia (us-east-1)'
+            - 'Oregon (us-west-2)'
+            - 'Ireland (eu-west-1)'
+          default: ap-northeast-2
+          description: AWS 리전 선택
+
+    - title: 📂 GitHub 설정
+      required: [github_token, github_owner, github_repo]
+      properties:
+        github_token:
+          title: GitHub Personal Access Token
+          type: string
+          description: GitHub API 접근을 위한 Personal Access Token (ghp_로 시작)
+          #ui:widget: password
+          ui:help: repo, workflow 권한이 필요합니다
+        github_owner:
+          title: GitHub 소유자
+          type: string
+          description: GitHub 조직 또는 사용자명
+          default: mzd-ctc
+          pattern: '^[a-zA-Z0-9-]+$'
+        github_repo:
+          title: GitHub 레포지토리명
+          type: string
+          description: 생성할 레포지토리명 (예 project-env-infrastructure)
+          pattern: '^[a-zA-Z0-9-_.]+$'
+        github_branch:
+          title: 브랜치명
+          type: string
+          default: main
+          description: 기본 브랜치명
+
+    - title: 🔐 AWS 인증 정보
+      description: AWS 리소스 생성을 위한 인증 정보를 입력하세요
+      required: [aws_access_key_id, aws_secret_access_key]
+      properties:
+        aws_access_key_id:
+          title: AWS Access Key ID
+          type: string
+          description: AWS Access Key ID (GitHub Secrets에 저장됩니다)
+          ui:widget: password
+        aws_secret_access_key:
+          title: AWS Secret Access Key
+          type: string
+          description: AWS Secret Access Key (GitHub Secrets에 저장됩니다)
+          ui:widget: password
+
+    - title: ⚙️ GitHub Actions 설정
+      description: GitHub Actions 설정은 생성된 레포지토리에서 수동으로 구성하세요
+
+    - title: 🏗️ 인프라 설정
+      description: 생성할 인프라 컴포넌트를 선택하세요
+      properties:
+        skeleton_source:
+          title: 스켈레톤 소스
+          type: string
+          enum: [local, github]
+          enumNames: ['로컬 파일 (테스트용)', 'GitHub 템플릿 (템플릿용)']
+          default: local
+          description: 스켈레톤 파일의 소스를 선택하세요
+        github_template_owner:
+          title: GitHub 템플릿 소유자
+          type: string
+          description: GitHub 템플릿 레포지토리 소유자 (조직 또는 사용자명)
+          default: mzd-ctc
+          pattern: '^[a-zA-Z0-9-]+$'
+          ui:
+            help: skeleton_source가 github일 때만 사용됩니다
+        github_template_repo:
+          title: GitHub 템플릿 레포지토리명
+          type: string
+          description: GitHub 템플릿 레포지토리명
+          default: idp-aws-devenv-template
+          pattern: '^[a-zA-Z0-9-_.]+$'
+          ui:
+            help: skeleton_source가 github일 때만 사용됩니다
+        github_template_branch:
+          title: GitHub 템플릿 브랜치명
+          type: string
+          default: main
+          description: GitHub 템플릿 브랜치명
+          ui:
+            help: skeleton_source가 github일 때만 사용됩니다
+        vpc_cidr:
+          title: VPC CIDR 블록
+          type: string
+          default: "10.0.0.0/16"
+          enum:
+            - "10.0.0.0/16"
+            - "10.1.0.0/16"
+            - "10.2.0.0/16"
+            - "172.16.0.0/16"
+          description: VPC의 CIDR 블록 선택
+        create_eks:
+          title: 🚢 EKS 클러스터 생성
+          type: boolean
+          default: true
+          description: Kubernetes 클러스터 (EKS) 생성 여부
+        create_rds:
+          title: 🗄️ RDS 데이터베이스 생성
+          type: boolean
+          default: false
+          description: PostgreSQL 데이터베이스 (RDS) 생성 여부
+
+  steps:
+    # 1. 입력값 검증 및 로깅
+    - id: validate-inputs
+      name: 📋 입력값 검증
+      action: debug:log
+      input:
+        message: |
+          🔍 입력값 검증 중...
+          
+          📋 프로젝트 정보:
+          ├── 팀: ${{ parameters.team_name }}
+          ├── 환경: ${{ parameters.environment_type }}
+          ├── 프로젝트: ${{ parameters.project_name }}
+          └── 리전: ${{ parameters.aws_region }}
+          
+          🏗️ 인프라 구성:
+          ├── VPC CIDR: ${{ parameters.vpc_cidr }}
+          ├── EKS 생성: ${{ parameters.create_eks }}
+          ├── RDS 생성: ${{ parameters.create_rds }}
+          
+          📂 GitHub:
+          ├── Owner: ${{ parameters.github_owner }}
+          ├── Repo: ${{ parameters.github_repo }}
+          └── Branch: ${{ parameters.github_branch }}
+    # 2. 클라우드(AWS) 스켈레톤 복사 (로컬 파일)
+    - id: fetch-aws-skeleton-local
+      name: 🏗️ AWS Terraform 스켈레톤 복사 (로컬)
+      if: ${{ parameters.skeleton_source === 'local' }}
+      action: fetch:template
+      input:
+        url: ./skeleton
+        values:
+          team_name: ${{ parameters.team_name }}
+          environment_type: ${{ parameters.environment_type }}
+          project_name: ${{ parameters.project_name }}
+          aws_region: ${{ parameters.aws_region }}
+          create_eks: ${{ parameters.create_eks | string }}
+          create_rds: ${{ parameters.create_rds | string }}
+          vpc_cidr: ${{ parameters.vpc_cidr }}
+          github_owner: ${{ parameters.github_owner }}
+          github_repo: ${{ parameters.github_repo }}
+    
+    # 2-1. 클라우드(AWS) 스켈레톤 복사 (GitHub 템플릿)
+    - id: fetch-aws-skeleton-github
+      name: 🏗️ AWS Terraform 스켈레톤 복사 (GitHub)
+      if: ${{ parameters.skeleton_source === 'github' }}
+      action: fetch:template
+      input:
+        url: https://github.com/${{ parameters.github_template_owner }}/${{ parameters.github_template_repo }}/tree/${{ parameters.github_template_branch }}/skeleton
+        values:
+          team_name: ${{ parameters.team_name }}
+          environment_type: ${{ parameters.environment_type }}
+          project_name: ${{ parameters.project_name }}
+          aws_region: ${{ parameters.aws_region }}
+          create_eks: ${{ parameters.create_eks | string }}
+          create_rds: ${{ parameters.create_rds | string }}
+          vpc_cidr: ${{ parameters.vpc_cidr }}
+          github_owner: ${{ parameters.github_owner }}
+          github_repo: ${{ parameters.github_repo }}
+    # 3. 파일 생성 완료
+    - id: creation-summary
+      name: ✅ 파일 생성 완료
+      action: debug:log
+      input:
+        message: |
+          📁 생성된 파일들:
+          - terraform/main.tf
+          - terraform/variables.tf  
+          - terraform/outputs.tf
+          - terraform/terraform.tfvars
+          - .github/workflows/terraform.yml
+          - terraform/README.md
+          - terraform/catalog-info.yaml
+          - .gitignore
+    # template.yaml 파일 제거
+    - id: remove-template-yaml
+      name: 🗑️ Template.yaml 제거
+      action: fs:delete
+      input:
+        files:
+          - template.yaml
+    
+    # 4. GitHub에 푸시
+    - id: github-publish
+      name: 📤 GitHub 레포지토리 생성
+      action: publish:github
+      input:
+        repoUrl: github.com?owner=${{ parameters.github_owner }}&repo=${{ parameters.github_repo }}
+        token: ${{ parameters.github_token }}
+        defaultBranch: ${{ parameters.github_branch }}
+        repoVisibility: private
+        description: "🏗️ AWS Terraform Infrastructure for ${{ parameters.project_name }} - Environment: ${{ parameters.environment_type }}, Team: ${{ parameters.team_name }}, Region: ${{ parameters.aws_region }}"
+        sourcePath: .
+        # 전체 디렉토리 push (template.yaml 포함)
+        gitCommitMessage: |
+          🎉 Initial AWS Terraform infrastructure setup
+
+          Infrastructure for ${{ parameters.project_name }} (${{ parameters.environment_type }} environment)
+          
+          Components:
+          - VPC with subnets (CIDR: ${{ parameters.vpc_cidr }})
+          - EKS cluster (if enabled)
+          - RDS PostgreSQL (if enabled)
+          
+          Team: ${{ parameters.team_name }}
+          Region: ${{ parameters.aws_region }}
+          
+          ⚠️ GitHub Actions Variables & Secrets는 수동으로 설정해야 합니다.
+      # 레포지토리가 이미 존재하는 경우 오류 무시하고 계속 진행
+      continueOnError: true
+    
+    # 5. GitHub 푸시 결과 및 설정 확인
+    - id: github-result
+      name: 📊 GitHub 레포지토리 생성 및 설정 완료
+      action: debug:log
+      input:
+        message: |
+          ✅ GitHub 레포지토리 생성 및 설정 완료!
+          
+          📊 GitHub Publish 결과:
+          - remoteUrl: ${{ steps.github-publish.output.remoteUrl }}
+          - repoContentsUrl: ${{ steps.github-publish.output.repoContentsUrl }}
+          - cloneUrl: ${{ steps.github-publish.output.cloneUrl }}
+          
+          ⚙️ 수동 설정이 필요한 GitHub Actions Variables:
+          - AWS_REGION: ${{ parameters.aws_region }}
+          - TEAM_NAME: ${{ parameters.team_name }}
+          - ENVIRONMENT_TYPE: ${{ parameters.environment_type }}
+          - PROJECT_NAME: ${{ parameters.project_name }}
+          - VPC_CIDR: ${{ parameters.vpc_cidr }}
+          - CREATE_EKS: ${{ parameters.create_eks | string }}
+          - CREATE_RDS: ${{ parameters.create_rds | string }}
+          
+          🔐 수동 설정이 필요한 GitHub Actions Secrets:
+          - AWS_ACCESS_KEY_ID: ${{ parameters.aws_access_key_id | truncate(10) }}...
+          - AWS_SECRET_ACCESS_KEY: ${{ parameters.aws_secret_access_key | truncate(10) }}...
+          
+          🏗️ 구성된 URL:
+          - 예상 URL: https://raw.githubusercontent.com/${{ parameters.github_owner }}/${{ parameters.github_repo }}/${{ parameters.github_branch }}/terraform/catalog-info.yaml
+          - 실제 remoteUrl: ${{ steps.github-publish.output.remoteUrl }}
+          
+          🔧 단계별 확인:
+          - github-publish 단계 ID: github-publish
+          - github-publish 단계 존재: ${{ steps.github-publish != null }}
+          - github-publish 출력 존재: ${{ steps.github-publish.output != null }}
+          - UI 입력 Github owner 값: ${{ parameters.github_owner }}
+          - UI 입력 Github repo 값: ${{ parameters.github_repo }}
+          - UI 입력 Github branch 값: ${{ parameters.github_branch }}
+          - UI 입력 Github token 값: ${{ parameters.github_token }}
+    
+    - id: setup-github-secrets
+      name: 🔐 GitHub Secrets 설정 안내
+      action: debug:log
+      input:
+        message: |
+          🔐 **GitHub Secrets 설정 안내**
+          
+          📋 **필요한 Secrets:**
+          - AWS_ACCESS_KEY_ID: ${{ parameters.aws_access_key_id | truncate(10) }}...
+          - AWS_SECRET_ACCESS_KEY: ${{ parameters.aws_secret_access_key | truncate(10) }}...
+          
+          🔧 **설정 방법:**
+          1. GitHub 레포지토리로 이동: https://github.com/${{ parameters.github_owner }}/${{ parameters.github_repo }}
+          2. Settings → Secrets and variables → Actions
+          3. "New repository secret" 클릭
+          4. 위의 Secrets들을 추가
+          
+          ⚠️ **주의:** Secrets는 보안상 자동으로 설정할 수 없습니다.
+          수동으로 설정해주세요.
+
+    # 5-1. 변수 치환 테스트
+    - id: variable-test
+      name: 🔍 변수 치환 테스트
+      action: debug:log
+      input:
+        message: |
+          🔍 변수 치환 테스트:
+          - owner: "${{ parameters.github_owner }}"
+          - repo: "${{ parameters.github_repo }}"
+          - branch: "${{ parameters.github_branch }}"
+          - token 길이: ${{ parameters.github_token | length }}
+          - token 시작: "${{ parameters.github_token | truncate(10) }}"
+    # GitHub 푸시 결과 확인
+    - id: github-result-2
+      name: 📊 GitHub 푸시 결과 확인
+      action: debug:log
+      input:
+        message: |
+          ✅ GitHub 레포지토리 생성 완료!
+          - Repository: https://github.com/${{ parameters.github_owner }}/${{ parameters.github_repo }}
+          - Branch: ${{ parameters.github_branch }}
+          - Visibility: public
+
+    # catalog-info.yaml 파일 확인
+    - id: verify-catalog-file
+      name: 🔍 catalog-info.yaml 파일 확인
+      action: debug:log
+      input:
+        message: |
+          🔍 **catalog-info.yaml 파일 확인**:
+          
+          📂 **예상 파일 경로**:
+          - GitHub: https://github.com/${{ parameters.github_owner }}/${{ parameters.github_repo }}/blob/${{ parameters.github_branch }}/catalog-info.yaml
+          - Raw: https://raw.githubusercontent.com/${{ parameters.github_owner }}/${{ parameters.github_repo }}/${{ parameters.github_branch }}/catalog-info.yaml
+          
+          🔧 **수동 확인 방법**:
+          ```bash
+          # GitHub API로 파일 존재 확인
+          curl -H "Authorization: token YOUR_TOKEN" \
+               https://api.github.com/repos/${{ parameters.github_owner }}/${{ parameters.github_repo }}/contents/catalog-info.yaml
+          
+          # Raw 파일 직접 확인
+          curl https://raw.githubusercontent.com/${{ parameters.github_owner }}/${{ parameters.github_repo }}/${{ parameters.github_branch }}/catalog-info.yaml
+          ```
+          
+          ✅ **파일이 정상적으로 푸시되었다면 위 URL들로 접근 가능합니다.**
+    
+    # 카탈로그 등록 및 GitHub Actions 설정 안내
+    - id: catalog-registration-guide-2
+      name: 📋 카탈로그 등록 및 GitHub Actions 설정 안내
+      action: debug:log
+      input:
+        message: |
+          🎉 **GitHub 레포지토리 생성 및 설정 완료!**
+          
+          ⚠️ **수동 설정 필요:**
+          - GitHub Actions Variables: AWS_REGION, TEAM_NAME, ENVIRONMENT_TYPE, PROJECT_NAME, VPC_CIDR, CREATE_EKS, CREATE_RDS
+          - GitHub Actions Secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+          
+          📂 **카탈로그 등록 방법**:
+          
+          🚀 **즉시 등록 (권장)**:
+          아래 명령어를 터미널에서 실행하세요:
+          ```bash
+          curl -X POST "http://localhost:7007/api/catalog/locations" \
+            -H "Content-Type: application/json" \
+            -d '{"type": "url", "target": "https://raw.githubusercontent.com/${{ parameters.github_owner }}/${{ parameters.github_repo }}/${{ parameters.github_branch }}/catalog-info.yaml"}'
+          ```
+          
+          ⏰ **자동 등록 (백업)**:
+          GitHub Provider가 1분 내에 자동으로 스캔합니다.
+          - Backstage 카탈로그 페이지에서 1-2분 후 새로고침
+          
+          ⚙️ **GitHub Actions 수동 설정:**
+          1. GitHub 레포지토리 → Settings → Secrets and variables → Actions
+          2. Variables 탭: 다음 변수들을 수동으로 추가:
+             - AWS_REGION: ${{ parameters.aws_region }}
+             - TEAM_NAME: ${{ parameters.team_name }}
+             - ENVIRONMENT_TYPE: ${{ parameters.environment_type }}
+             - PROJECT_NAME: ${{ parameters.project_name }}
+             - VPC_CIDR: ${{ parameters.vpc_cidr }}
+             - CREATE_EKS: ${{ parameters.create_eks | string }}
+             - CREATE_RDS: ${{ parameters.create_rds | string }}
+          3. Secrets 탭: 다음 시크릿들을 수동으로 추가:
+             - AWS_ACCESS_KEY_ID: ${{ parameters.aws_access_key_id }}
+             - AWS_SECRET_ACCESS_KEY: ${{ parameters.aws_secret_access_key }}
+          4. Actions 탭: "Terraform CI/CD" 워크플로우 확인
+          
+          🚀 **다음 단계:**
+          1. GitHub Actions → "Terraform CI/CD" → "Run workflow" → Action: "plan"
+          2. Plan 결과 확인 후 문제없으면 "apply" 실행
+          3. AWS 콘솔에서 생성된 리소스 확인
+          
+          🔗 **생성된 레포지토리**:
+          - GitHub: https://github.com/${{ parameters.github_owner }}/${{ parameters.github_repo }}
+          - Raw URL: https://raw.githubusercontent.com/${{ parameters.github_owner }}/${{ parameters.github_repo }}/${{ parameters.github_branch }}/catalog-info.yaml
+          
+          ✅ **등록 후 확인**:
+          - 카탈로그 페이지: http://localhost:3000/catalog
+          - 카탈로그 등록 페이지: http://localhost:3000/catalog-registration
+          - 또는 검색창에서 "${{ parameters.project_name }}" 검색
+          
+          🔍 **문제 해결:**
+          - URL이 404 오류인 경우: 레포지토리 생성 후 몇 분 대기
+          - 인증 오류인 경우: GitHub 토큰 권한 확인
+          - 이미 등록된 경우: 기존 등록 삭제 후 재등록
+          - Variables/Secrets 미설정: GitHub 레포지토리 설정에서 수동 설정
+
+    # GitHub Actions 수동 실행 안내
+    - id: github-actions-manual-guide
+      name: 🚀 GitHub Actions 수동 실행 안내
+      action: debug:log
+      input:
+        message: |
+          🎉 **프로젝트 생성 완료!**
+          
+          📋 **GitHub Actions 수동 실행 방법**:
+          
+          1. **GitHub 레포지토리로 이동**:
+             https://github.com/${{ parameters.github_owner }}/${{ parameters.github_repo }}
+          
+          2. **Actions 탭으로 이동**:
+             https://github.com/${{ parameters.github_owner }}/${{ parameters.github_repo }}/actions
+          
+          3. **"Terraform CI/CD" 워크플로우 선택**
+          
+          4. **"Run workflow" 버튼 클릭**
+          
+          5. **Action 선택**: "plan" (기본값)
+          
+          6. **"Run workflow" 클릭**
+          
+          ⚙️ **GitHub Actions Variables 설정** (필요시):
+          - AWS_REGION: ${{ parameters.aws_region }}
+          - TEAM_NAME: ${{ parameters.team_name }}
+          - ENVIRONMENT_TYPE: ${{ parameters.environment_type }}
+          - PROJECT_NAME: ${{ parameters.project_name }}
+          - VPC_CIDR: ${{ parameters.vpc_cidr }}
+          - CREATE_EKS: ${{ parameters.create_eks | string }}
+          - CREATE_RDS: ${{ parameters.create_rds | string }}
+          
+          🔐 **GitHub Actions Secrets 설정** (필요시):
+          - AWS_ACCESS_KEY_ID: ${{ parameters.aws_access_key_id | truncate(10) }}...
+          - AWS_SECRET_ACCESS_KEY: ${{ parameters.aws_secret_access_key | truncate(10) }}...
+          
+          🚀 **자동 트리거**: 코드 푸시 시 자동으로 Terraform Plan 실행됩니다.
+
+  resources:
+    - apiVersion: scaffolder.backstage.io/v1beta3
+      kind: Resource
+      metadata:
+        name: terraform-infrastructure
+        description: AWS Terraform 인프라 리소스

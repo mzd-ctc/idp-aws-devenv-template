@@ -1,0 +1,81 @@
+name: Publish TechDocs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+  workflow_dispatch:  # 수동 실행 가능
+
+jobs:
+  publish-techdocs:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install MkDocs dependencies
+        run: |
+          pip install mkdocs
+          pip install mkdocs-material
+          pip install mkdocs-git-revision-date-localized-plugin
+          
+      - name: Build documentation
+        run: mkdocs build
+
+      - name: Debug AWS Secrets Availability
+        run: |
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Repository Owner: $GITHUB_REPOSITORY_OWNER"
+          
+          # Secret 존재 여부만 확인 (값은 보안상 출력되지 않음)
+          if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+            echo "✅ AWS_ACCESS_KEY_ID is available (length: ${#AWS_ACCESS_KEY_ID})"
+          else
+            echo "❌ AWS_ACCESS_KEY_ID is not available"
+          fi
+          
+          if [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "✅ AWS_SECRET_ACCESS_KEY is available (length: ${#AWS_SECRET_ACCESS_KEY})"
+          else
+            echo "❌ AWS_SECRET_ACCESS_KEY is not available"
+          fi
+        env:
+          AWS_ACCESS_KEY_ID: ${{ vars.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ vars.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ vars.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+          
+      - name: Verify AWS credentials
+        run: |
+          echo "Testing AWS credentials..."
+          aws sts get-caller-identity
+
+      - name: Upload to S3
+        run: |
+          # S3 경로 구성 (catalog-info.yaml의 name과 일치)
+          # 기본값으로 프로젝트명 사용
+          ENTITY_NAME="${GITHUB_REPOSITORY#*/}"
+          echo "Uploading TechDocs for entity: $ENTITY_NAME"
+          aws s3 sync site/ \
+            s3://idp-catalog-mzd/techdocs/default/component/${ENTITY_NAME}/ \
+            --delete
+          
+      - name: Invalidate CloudFront cache (optional)
+        if: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID != '' }}
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/techdocs/*"

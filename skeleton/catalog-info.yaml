@@ -1,0 +1,124 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: "${{ values.project_name }}"
+  title: "${{ values.project_name }}"
+  description: |
+    AWS Terraform infrastructure for ${{ values.project_name }} project in ${{ values.environment_type }} environment.
+    Managed by ${{ values.team_name }} team.
+  annotations:
+    # GitHub 연동
+    github.com/project-slug: "${{ values.github_owner }}/${{ values.github_repo }}"
+    backstage.io/source-location: "url:https://github.com/${{ values.github_owner }}/${{ values.github_repo }}"
+    
+    # 기술 문서
+    backstage.io/techdocs-ref: dir:.
+    
+    # AWS 리소스 연동
+    aws.amazon.com/region: "${{ values.aws_region }}"
+    aws.amazon.com/vpc-id: "output:vpc_id"
+    # EKS 클러스터 (조건부)
+    # aws.amazon.com/eks-cluster-name: "${{ values.project_name }}-eks"
+    # RDS 인스턴스 (조건부)
+    # aws.amazon.com/rds-instance-id: "${{ values.project_name }}-db"
+    
+    # 비용 및 관리
+    cost-center: "${{ values.team_name }}"
+    environment: "${{ values.environment_type }}"
+    terraform/version: "~> 1.5"
+    
+    # 모니터링 (선택사항)
+    # grafana/dashboard-selector: "environment=${{ values.environment_type }},team=${{ values.team_name }}"
+    # datadog/dashboard-url: "https://app.datadoghq.com/dashboard/xxx"
+    
+    # 보안 및 컴플라이언스
+    security/owner: "${{ values.team_name }}"
+    compliance/soc2: "true"
+    
+  tags:
+    - terraform
+    - aws
+    - infrastructure
+    - "${{ values.environment_type }}"
+    - "${{ values.team_name }}"
+    # 조건부 태그들 (필요시 주석 해제)
+    # - kubernetes
+    # - eks
+    # - database
+    # - postgresql
+    - iac
+    - devops
+    
+  links:
+    # GitHub 관련 링크
+    - url: https://github.com/${{ values.github_owner }}/${{ values.github_repo }}
+      title: Source Code
+      icon: github
+      type: source-code
+      
+    - url: https://github.com/${{ values.github_owner }}/${{ values.github_repo }}/actions
+      title: GitHub Actions (CI/CD)
+      icon: github
+      type: ci-cd
+      
+    - url: https://github.com/${{ values.github_owner }}/${{ values.github_repo }}/actions/workflows/terraform.yml
+      title: Terraform CI/CD Workflow
+      icon: github
+      type: ci-cd
+      
+    - url: https://github.com/${{ values.github_owner }}/${{ values.github_repo }}/issues
+      title: Issues & Support
+      icon: github
+      type: support
+      
+    # AWS Console 링크
+    - url: https://console.aws.amazon.com/vpc/home?region=${{ values.aws_region }}
+      title: AWS VPC Console
+      icon: cloud
+      type: infrastructure
+      
+    # 조건부 링크들 (필요시 주석 해제)
+    # - url: "https://console.aws.amazon.com/eks/home?region=${{ values.aws_region }}#/clusters/${{ values.project_name }}-eks"
+    #   title: AWS EKS Console
+    #   icon: cloud
+    #   type: infrastructure
+    # - url: "https://console.aws.amazon.com/rds/home?region=${{ values.aws_region }}"
+    #   title: AWS RDS Console
+    #   icon: cloud
+    #   type: infrastructure
+      
+    # Terraform State 관리 (S3 백엔드 사용시)
+    - url: https://console.aws.amazon.com/s3/buckets/terraform-state-${{ values.team_name }}-${{ values.environment_type }}
+      title: Terraform State (S3)
+      icon: cloud
+      type: infrastructure
+      
+    # 문서 링크
+    - url: https://github.com/${{ values.github_owner }}/${{ values.github_repo }}/blob/main/README.md
+      title: Infrastructure Documentation
+      icon: docs
+      type: documentation
+      
+    # 비용 관리
+    - url: https://console.aws.amazon.com/cost-management/home?region=${{ values.aws_region }}
+      title: AWS Cost Explorer
+      icon: cloud
+      type: cost-management
+
+spec:
+  type: infrastructure
+  lifecycle: "${{ values.environment_type }}"
+  owner: "group:${{ values.team_name }}"
+  
+  # 의존성 정의 (필요시 주석 해제)
+  # dependsOn:
+  #   - "resource:default/aws-${{ values.aws_region }}"
+  #   - "component:default/kubernetes-platform"
+  #   - "component:default/database-platform"
+  
+  # 제공하는 API/서비스
+  providesApis: []
+  
+  # 소비하는 API/서비스
+  consumesApis: []
+
